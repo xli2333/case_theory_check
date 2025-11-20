@@ -1,0 +1,136 @@
+===============================================
+核心问题修复说明
+===============================================
+
+## 问题根源
+
+**后端API逻辑错误**：当用户输入主要理论时，后端直接使用用户输入的理论，
+没有从文本中识别所有理论，导致只返回1个理论（用户输入的理论）。
+
+## 修复内容
+
+### 1. 后端API逻辑修复 (src/api/main.py)
+
+**修改前（错误逻辑）：**
+```python
+if request.theories:
+    case_data['theories'] = request.theories  # ❌ 直接用用户输入
+else:
+    case_data['theories'] = CaseParser.extract_theories_from_text(...)
+```
+
+**修改后（正确逻辑）：**
+```python
+# 始终从文本中提取所有理论
+identified_theories = CaseParser.extract_theories_from_text(...)
+case_data['theories'] = identified_theories
+
+# 用户指定的主要理论仅作为标记
+if request.theories or request.primary_theories:
+    primary_theories_input = ...
+    case_data['primary_theories'] = primary_theories_input
+```
+
+**关键改变**：
+- ✅ 始终执行理论识别，不论用户是否输入
+- ✅ 用户输入的理论作为"主要理论"标记，不影响识别
+- ✅ 返回完整的理论列表 + 主要理论标记
+
+### 2. 前端字段修复 (src/web/app.py)
+
+**修改前：**
+```python
+data["theories"] = theories_input  # ❌ 使用theories字段
+```
+
+**修改后：**
+```python
+data["primary_theories"] = theories_input  # ✅ 使用primary_theories字段
+```
+
+**影响范围**：
+- PDF上传分析（第201行）
+- 文本输入分析（第238行）
+
+===============================================
+
+## 数据流程
+
+### 正确的处理流程
+
+1. **前端** → 用户输入主要理论 "swot"
+   ↓
+2. **前端** → 发送 `primary_theories: ["swot"]` 到后端
+   ↓
+3. **后端** → 从PDF/文本中识别所有理论
+   - 识别结果: ["SWOT分析", "蓝海战略", "波特五力", ...]
+   ↓
+4. **后端** → 标准化主要理论
+   - 用户输入: "swot"
+   - 标准化后: "SWOT分析"
+   ↓
+5. **后端** → 返回数据
+   ```json
+   {
+     "identified_theories": ["SWOT分析", "蓝海战略", ...],
+     "primary_theories": ["swot"],
+     ...
+   }
+   ```
+   ↓
+6. **前端** → 匹配主要理论
+   - 在identified_theories中查找包含"swot"的理论
+   - 找到: "SWOT分析"
+   ↓
+7. **前端** → 分离显示
+   - 主要理论: SWOT分析
+   - 其他理论: 蓝海战略, 波特五力, ...
+
+===============================================
+
+## 兼容性处理
+
+为了保持向后兼容，后端同时支持两种字段：
+
+1. **theories字段**（旧版本）
+   - 如果传入，视为主要理论
+
+2. **primary_theories字段**（新版本）
+   - 专门用于指定主要理论
+
+优先级：primary_theories > theories
+
+===============================================
+
+## 测试验证
+
+修复后的预期行为：
+
+### 场景1：输入主要理论 "swot"
+✓ 系统识别所有理论: ["SWOT分析", "蓝海战略", ...]
+✓ 匹配主要理论: "SWOT分析"
+✓ 显示:
+  - 主要理论部分: SWOT分析
+  - 其他理论部分: 蓝海战略, 波特五力, ...
+
+### 场景2：不输入主要理论
+✓ 系统识别所有理论: ["SWOT分析", "蓝海战略", ...]
+✓ 无主要理论标记
+✓ 显示: 所有理论正常显示
+
+===============================================
+
+## 修改的文件
+
+1. src/api/main.py
+   - 第190-223行：理论识别逻辑
+
+2. src/web/app.py
+   - 第201行：PDF上传的primary_theories字段
+   - 第238行：文本输入的primary_theories字段
+
+3. src/api/schemas.py
+   - 第18行：CaseAnalysisRequest支持primary_theories
+   - 第71行：CaseAnalysisResponse返回primary_theories
+
+===============================================

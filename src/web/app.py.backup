@@ -1,0 +1,514 @@
+"""Streamlit前端应用 - 案例知识点匹配系统"""
+
+import streamlit as st
+import requests
+import pandas as pd
+from pathlib import Path
+from typing import Dict, List, Optional
+import json
+import sys
+
+# 添加项目根目录到路径
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.pdf_converter import PDFConverter
+
+# ==================== 页面配置 ====================
+
+st.set_page_config(
+    page_title="案例知识点匹配系统",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 自定义CSS样式
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 600;
+        color: #1f77b4;
+        margin-bottom: 0.5rem;
+    }
+    .sub-header {
+        font-size: 1.1rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    .section-header {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #2c3e50;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #1f77b4;
+        padding-bottom: 0.5rem;
+    }
+    .subsection-header {
+        font-size: 1.2rem;
+        font-weight: 500;
+        color: #34495e;
+        margin-top: 1.5rem;
+        margin-bottom: 0.8rem;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 1rem;
+        border-left: 4px solid #1f77b4;
+    }
+    .info-box {
+        background-color: #e8f4f8;
+        border-left: 4px solid #2196F3;
+        padding: 1rem;
+        border-radius: 4px;
+        margin: 1rem 0;
+    }
+    .success-box {
+        background-color: #e8f5e9;
+        border-left: 4px solid #4CAF50;
+        padding: 1rem;
+        border-radius: 4px;
+        margin: 1rem 0;
+    }
+    .warning-box {
+        background-color: #fff3e0;
+        border-left: 4px solid #ff9800;
+        padding: 1rem;
+        border-radius: 4px;
+        margin: 1rem 0;
+    }
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# API端点配置
+API_BASE_URL = "http://localhost:8000"
+
+# ==================== 工具函数 ====================
+
+def call_api(endpoint: str, method: str = "GET", data: Optional[Dict] = None, files: Optional[Dict] = None):
+    """调用后端API"""
+    url = f"{API_BASE_URL}{endpoint}"
+
+    try:
+        if method == "GET":
+            response = requests.get(url, params=data)
+        elif method == "POST":
+            if files:
+                response = requests.post(url, data=data, files=files)
+            else:
+                response = requests.post(url, json=data)
+        else:
+            return None
+
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.ConnectionError:
+        st.error("无法连接到后端服务，请确保API服务已启动 (端口 8000)")
+        return None
+    except requests.exceptions.HTTPError as e:
+        st.error(f"API请求失败: {e}")
+        return None
+    except Exception as e:
+        st.error(f"请求错误: {e}")
+        return None
+
+# ==================== 主界面 ====================
+
+# 标题
+st.markdown('<div class="main-header">案例知识点匹配系统</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">基于BGE-M3的案例理论知识点重复度检测与分析</div>', unsafe_allow_html=True)
+
+# 侧边栏
+with st.sidebar:
+    st.markdown("### 功能选择")
+
+    # 页面选择
+    page = st.radio(
+        "请选择功能模块",
+        ["案例分析", "理论查询", "案例检索"],
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+    st.markdown("### 系统信息")
+
+    # 获取系统状态
+    health = call_api("/health")
+    if health:
+        st.success("系统运行正常")
+        stats = call_api("/stats")
+        if stats:
+            st.metric("数据库案例数", stats.get('total_cases', 0))
+            st.metric("理论知识点数", stats.get('total_theories', 0))
+    else:
+        st.error("系统离线")
+
+# ==================== 页面路由 ====================
+
+if page == "案例分析":
+    # ==================== 案例分析页面 ====================
+    st.markdown('<div class="section-header">案例输入</div>', unsafe_allow_html=True)
+
+    # 输入方式选择
+    input_method = st.radio(
+    "选择输入方式",
+    ["PDF文件上传", "文本输入"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+# 基本信息输入
+col1, col2 = st.columns(2)
+
+with col1:
+    case_name = st.text_input("案例名称 *", placeholder="请输入案例名称")
+    author = st.text_input("作者", placeholder="可选")
+    subject = st.text_input("学科领域", placeholder="如：市场营销、战略管理等")
+
+with col2:
+    industry = st.text_input("行业", placeholder="如：制造业、金融等")
+    keywords = st.text_input("关键词", placeholder="多个关键词用逗号分隔")
+    theories_input = st.text_input("指定理论 (可选)", placeholder="多个理论用逗号分隔，留空则自动识别")
+
+# 内容输入
+if input_method == "PDF文件上传":
+    uploaded_file = st.file_uploader("上传PDF文件", type=['pdf'])
+
+    if st.button("开始分析", type="primary", disabled=not (case_name and uploaded_file)):
+        with st.spinner("正在分析案例..."):
+            # 准备数据
+            data = {"name": case_name}
+            if author:
+                data["author"] = author
+            if subject:
+                data["subject"] = subject
+            if industry:
+                data["industry"] = industry
+            if keywords:
+                data["keywords"] = keywords
+            if theories_input:
+                data["theories"] = theories_input
+
+            # 准备文件
+            files = {
+                "file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")
+            }
+
+            # 调用API
+            result = call_api("/analyze/upload", method="POST", data=data, files=files)
+
+            if result:
+                st.session_state.analysis_result = result
+
+else:  # 文本输入
+    case_text = st.text_area(
+        "案例文本 *",
+        height=300,
+        placeholder="请输入或粘贴案例全文..."
+    )
+
+    if st.button("开始分析", type="primary", disabled=not (case_name and case_text)):
+        with st.spinner("正在分析案例..."):
+            # 准备数据
+            data = {
+                "name": case_name,
+                "text": case_text
+            }
+
+            if author:
+                data["author"] = author
+            if subject:
+                data["subject"] = subject
+            if industry:
+                data["industry"] = industry
+            if keywords:
+                data["keywords"] = keywords
+            if theories_input:
+                data["theories"] = [t.strip() for t in theories_input.split(",") if t.strip()]
+
+            # 调用API
+            result = call_api("/analyze/text", method="POST", data=data)
+
+            if result:
+                st.session_state.analysis_result = result
+
+# ==================== 分析结果展示 ====================
+
+if hasattr(st.session_state, 'analysis_result'):
+    st.markdown("---")
+    st.markdown('<div class="section-header">分析结果</div>', unsafe_allow_html=True)
+
+    result = st.session_state.analysis_result
+
+    # 1. 创新度评分
+    st.markdown('<div class="subsection-header">创新度评分</div>', unsafe_allow_html=True)
+
+    innovation = result.get("innovation_score", {})
+    score = innovation.get("innovation_score", 0)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("创新度总分", f"{score:.1f}", help="基于理论频率计算的创新度评分 (0-100)")
+    with col2:
+        novel_count = len(innovation.get("novel_theories", []))
+        st.metric("新颖理论", f"{novel_count} 个", help="使用频次 ≤ 2次")
+    with col3:
+        common_count = len(innovation.get("common_theories", []))
+        st.metric("常用理论", f"{common_count} 个", help="使用频次 3-7次")
+    with col4:
+        high_freq_count = len(innovation.get("high_frequency_theories", []))
+        st.metric("高频理论", f"{high_freq_count} 个", help="使用频次 ≥ 8次")
+
+    # 2. 理论匹配结果
+    st.markdown('<div class="subsection-header">理论匹配结果</div>', unsafe_allow_html=True)
+
+    theories = result.get("identified_theories", [])
+    exact_matches = result.get("exact_matches", {})
+    fuzzy_matches = result.get("fuzzy_matches", {})
+    excel_matches = result.get("excel_matches", {})
+
+    if theories:
+        exact_count = len(exact_matches)
+        fuzzy_count = len(fuzzy_matches)
+
+        # 统计信息
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("识别理论总数", len(theories))
+        with col2:
+            st.metric("数据库精确匹配", exact_count)
+        with col3:
+            st.metric("数据库模糊匹配", fuzzy_count)
+
+        # Tab布局显示不同匹配类型
+        tab1, tab2, tab3 = st.tabs(["数据库精确匹配", "数据库模糊匹配", "Excel教参覆盖"])
+
+        with tab1:
+            if exact_count > 0:
+                st.markdown('<div class="info-box">以下理论在数据库中找到完全匹配。点击理论名称查看详细使用情况。</div>', unsafe_allow_html=True)
+
+                for theory in theories:
+                    if theory in exact_matches:
+                        match_info = exact_matches[theory]
+                        cases = match_info.get('cases', [])
+
+                        with st.expander(f"**{theory}** - 使用 {len(cases)} 次 ({match_info.get('frequency_rank', '未知')})"):
+                            if cases:
+                                st.markdown("#### 使用案例详情")
+
+                                case_details = []
+                                for case in cases:
+                                    case_details.append({
+                                        "案例名称": case.get('name', 'N/A'),
+                                        "案例编号": case.get('code', 'N/A'),
+                                        "年份": case.get('year', 'N/A'),
+                                        "学科": case.get('subject', 'N/A'),
+                                        "行业": case.get('industry', 'N/A')
+                                    })
+
+                                df_cases = pd.DataFrame(case_details)
+                                st.dataframe(df_cases, use_container_width=True, hide_index=True)
+
+                                # 年份分布统计
+                                if case_details:
+                                    years = [c.get('year', 'N/A') for c in cases]
+                                    year_counts = {}
+                                    for year in years:
+                                        if year != 'N/A':
+                                            year_counts[year] = year_counts.get(year, 0) + 1
+
+                                    if year_counts:
+                                        st.markdown("**年份分布:**")
+                                        cols = st.columns(len(year_counts))
+                                        for idx, (year, count) in enumerate(sorted(year_counts.items())):
+                                            with cols[idx]:
+                                                st.metric(year, f"{count} 次")
+                            else:
+                                st.info("暂无案例详情")
+            else:
+                st.info("未找到精确匹配的理论")
+
+        with tab2:
+            if fuzzy_count > 0:
+                st.markdown('<div class="info-box">以下理论通过模糊匹配找到了数据库中的相似理论。点击查看详细使用情况。</div>', unsafe_allow_html=True)
+
+                for theory in theories:
+                    if theory in fuzzy_matches:
+                        match_info = fuzzy_matches[theory]
+                        input_theory = match_info.get('input_theory', theory)
+                        matched_theory = match_info.get('matched_theory', '')
+                        cases = match_info.get('cases', [])
+
+                        with st.expander(f"**{input_theory}** → {matched_theory} - 使用 {len(cases)} 次 ({match_info.get('frequency_rank', '未知')})"):
+                            st.markdown(f"**输入理论:** {input_theory}")
+                            st.markdown(f"**匹配到:** {matched_theory}")
+                            st.markdown(f"**匹配方式:** 模糊匹配")
+
+                            if cases:
+                                st.markdown("#### 使用案例详情")
+
+                                case_details = []
+                                for case in cases:
+                                    case_details.append({
+                                        "案例名称": case.get('name', 'N/A'),
+                                        "案例编号": case.get('code', 'N/A'),
+                                        "年份": case.get('year', 'N/A'),
+                                        "学科": case.get('subject', 'N/A'),
+                                        "行业": case.get('industry', 'N/A')
+                                    })
+
+                                df_cases = pd.DataFrame(case_details)
+                                st.dataframe(df_cases, use_container_width=True, hide_index=True)
+
+                                # 年份分布统计
+                                if case_details:
+                                    years = [c.get('year', 'N/A') for c in cases]
+                                    year_counts = {}
+                                    for year in years:
+                                        if year != 'N/A':
+                                            year_counts[year] = year_counts.get(year, 0) + 1
+
+                                    if year_counts:
+                                        st.markdown("**年份分布:**")
+                                        cols = st.columns(len(year_counts))
+                                        for idx, (year, count) in enumerate(sorted(year_counts.items())):
+                                            with cols[idx]:
+                                                st.metric(year, f"{count} 次")
+                            else:
+                                st.info("暂无案例详情")
+            else:
+                st.info("未找到模糊匹配的理论")
+
+        with tab3:
+            if excel_matches:
+                excel_covered = [t for t, info in excel_matches.items() if info.get('excel_coverage')]
+                excel_not_covered = [t for t, info in excel_matches.items() if not info.get('excel_coverage')]
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Excel已收录", f"{len(excel_covered)} 个")
+                with col2:
+                    st.metric("Excel未收录", f"{len(excel_not_covered)} 个")
+
+                st.markdown('<div class="info-box">以下显示理论在历年案例统计Excel中的覆盖情况。点击查看详细来源。</div>', unsafe_allow_html=True)
+
+                # 已收录的理论
+                if excel_covered:
+                    st.markdown("**已收录理论:**")
+                    for theory in excel_covered:
+                        match_info = excel_matches[theory]
+                        input_t = match_info.get('input_theory', theory)
+                        matched_t = match_info.get('matched_theory', theory)
+                        match_type = match_info.get('match_type', 'exact')
+                        source_count = match_info.get('source_count', 0)
+                        sources = match_info.get('sources', [])
+
+                        match_type_display = "精确" if match_type == 'exact' else "模糊"
+
+                        with st.expander(f"**{input_t}** - 出现 {source_count} 次 ({match_type_display}匹配)"):
+                            if input_t != matched_t:
+                                st.markdown(f"**输入理论:** {input_t}")
+                                st.markdown(f"**匹配到:** {matched_t}")
+
+                            if sources:
+                                st.markdown("#### Excel来源详情")
+
+                                source_details = []
+                                for source in sources:
+                                    source_details.append({
+                                        "Excel文件": source.get('file', 'N/A'),
+                                        "案例名称": source.get('case_name', 'N/A') if source.get('case_name') else '-',
+                                        "案例编号": source.get('case_code', 'N/A') if source.get('case_code') else '-'
+                                    })
+
+                                df_sources = pd.DataFrame(source_details)
+                                st.dataframe(df_sources, use_container_width=True, hide_index=True)
+
+                                # 统计Excel文件分布
+                                file_counts = {}
+                                for source in sources:
+                                    file_name = source.get('file', 'N/A')
+                                    file_counts[file_name] = file_counts.get(file_name, 0) + 1
+
+                                if file_counts and len(file_counts) > 1:
+                                    st.markdown("**文件分布:**")
+                                    cols = st.columns(min(len(file_counts), 4))
+                                    for idx, (file_name, count) in enumerate(sorted(file_counts.items())):
+                                        with cols[idx % 4]:
+                                            st.metric(file_name, f"{count} 次")
+                            else:
+                                st.info("暂无来源详情")
+
+                # 未收录的理论
+                if excel_not_covered:
+                    st.markdown("---")
+                    st.markdown("**未收录理论:**")
+                    st.warning(f"以下 {len(excel_not_covered)} 个理论在Excel教参中未找到: {', '.join(excel_not_covered)}")
+            else:
+                st.info("无Excel匹配数据")
+    else:
+        st.warning("未识别到理论知识点")
+
+    # 3. 相似案例排名
+    st.markdown('<div class="subsection-header">相似案例排名</div>', unsafe_allow_html=True)
+    similar_cases = result.get("similar_cases", [])
+
+    if similar_cases:
+        st.markdown('<div class="info-box">根据综合相似度排序 (理论重叠40% + 语义相似度30% + 关键词20% + 学科10%)</div>', unsafe_allow_html=True)
+
+        case_data = []
+        for i, case in enumerate(similar_cases, 1):
+            metadata = case.get("metadata", {})
+            scores = case.get("scores", {})
+
+            case_data.append({
+                "排名": i,
+                "案例名称": metadata.get("name", "N/A"),
+                "年份": metadata.get("year", "N/A"),
+                "综合相似度": f"{scores.get('final_score', 0):.3f}",
+                "理论重叠": f"{len(scores.get('matched_theories', []))}/{len(theories)}",
+                "语义相似度": f"{scores.get('semantic_similarity', 0):.3f}",
+                "学科": metadata.get("subject", "N/A")
+            })
+
+        df = pd.DataFrame(case_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("未找到相似案例")
+
+    # 4. 完整报告
+    st.markdown('<div class="subsection-header">完整分析报告</div>', unsafe_allow_html=True)
+    with st.expander("查看Markdown格式报告"):
+        report = result.get("report_markdown", "")
+        st.markdown(report)
+
+    # 下载报告按钮
+    if report:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.download_button(
+                label="下载Markdown格式",
+                data=report,
+                file_name=f"{case_name}_分析报告.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
+
+        with col2:
+            try:
+                # 转换为PDF
+                pdf_bytes = PDFConverter.markdown_to_pdf(report)
+                st.download_button(
+                    label="下载PDF格式",
+                    data=pdf_bytes,
+                    file_name=f"{case_name}_分析报告.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"PDF生成失败: {e}")

@@ -1,0 +1,47 @@
+services:
+  # 1. 后端 API 服务 (FastAPI)
+  - type: web
+    name: casecheck-api
+    env: python
+    region: singapore  # 选一个靠近用户的区域，或者由 Render 自动选择
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start_render_api.sh
+    disk:
+      name: data-disk
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      # 覆盖 config.py 中的路径配置，指向持久化磁盘
+      - key: DATABASE_PATH
+        value: /var/data/database/cases.db
+      - key: VECTOR_DB_PATH
+        value: /var/data/database/vectors
+      - key: THEORY_MAPPING_PATH
+        value: /var/data/theory_mapping.yaml
+      - key: LOG_FILE
+        value: /var/data/logs/app.log
+      - key: MODEL_CACHE_DIR
+        value: /var/data/models
+
+  # 2. 前端 Web 服务 (Streamlit)
+  - type: web
+    name: casecheck-web
+    env: python
+    region: singapore
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run src/web/app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      # 自动获取后端 API 的 URL
+      - key: API_URL
+        fromService:
+          type: web
+          name: casecheck-api
+          property: url
