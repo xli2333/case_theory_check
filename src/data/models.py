@@ -22,23 +22,12 @@ class Theory(BaseModel):
 
 class Case(BaseModel):
     """案例模型"""
-    id: Optional[int] = None
-    name: str = Field(..., description="案例名称")
-    code: Optional[str] = Field(None, description="案例编号")
-    year: Optional[str] = Field(None, description="年份 (如FDC-24)")
-    author: Optional[str] = Field(None, description="第一作者")
-    co_authors: Optional[str] = Field(None, description="其他作者")
-    subject: Optional[str] = Field(None, description="学科")
-    industry: Optional[str] = Field(None, description="行业")
-    publish_date: Optional[str] = Field(None, description="出版日期")
-    student_group: Optional[str] = Field(None, description="适用学生群体")
-    keywords: Optional[str] = Field(None, description="关键词")
-    abstract: Optional[str] = Field(None, description="摘要")
-    course: Optional[str] = Field(None, description="使用课程")
-    full_text: Optional[str] = Field(None, description="完整文本")
-    pdf_path: Optional[str] = Field(None, description="PDF路径")
-    theories: List[str] = Field(default_factory=list, description="理论列表")
-    created_at: Optional[datetime] = None
+    model_config = {'protected_namespaces': ()}
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    text: str
+    code: Optional[str] = None
 
     class Config:
         from_attributes = True
