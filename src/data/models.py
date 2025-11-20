@@ -2,7 +2,8 @@
 
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field
+import uuid
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class Theory(BaseModel):
@@ -16,21 +17,17 @@ class Theory(BaseModel):
     description: Optional[str] = Field(None, description="理论描述")
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class Case(BaseModel):
     """案例模型"""
-    model_config = {'protected_namespaces': ()}
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
     text: str
     code: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class CaseTheory(BaseModel):
@@ -44,8 +41,7 @@ class CaseTheory(BaseModel):
     question_style: Optional[str] = Field(None, description="问题风格 (close/open)")
     context: Optional[str] = Field(None, description="使用上下文")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MatchResult(BaseModel):
